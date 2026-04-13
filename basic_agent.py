@@ -1,8 +1,11 @@
 import os
 from openai import OpenAI
+from pathlib import Path
+from tcm_retrieval import literature_retrieval
 
-QWEN_API_KEY = "sk-1170bf351c7a45e1bd348e9012d4268e"
-DEEPSEEK_API_KEY = "sk-16e95fdf022a443ca23c64982a025e58"
+QWEN_API_KEY = "QWEN_KEY"
+DEEPSEEK_API_KEY = "DS_KEY"
+PDF_PATH = "./pdfs"
 
 qwen_client = OpenAI(
     api_key=QWEN_API_KEY,
@@ -15,10 +18,13 @@ deepseek_client = OpenAI(
 )
 
 # Qwen开方
-def generate_prescription_qwen(symptoms):
+def generate_prescription_qwen(literature_summary, symptoms):
+    
     print("▶ Qwen 正在进行辨证与组方...")
     prompt = f"""
-    你是一位资深中医。患者主诉症状如下：【{symptoms}】
+    你是一位资深中医。患者主诉症状如下：【{symptoms}】;
+    从文献中获得的参考资料如下：
+    【{literature_summary}】
     请执行以下任务：
     1. 给出明确的中医辨证结果，需要指出从何种症状得出何种证候（如：气虚血瘀、肝郁化火等）。
     2. 开具一个合适的药方（包含具体中药名和参考剂量）。
@@ -34,13 +40,15 @@ def generate_prescription_qwen(symptoms):
     return response.choices[0].message.content
 
 # DeepSeek审核
-def verify_and_provide_evidence_deepseek(symptoms, prescription):
+def verify_and_provide_evidence_deepseek(symptoms, prescription,literature_summary):
     print("▶ DeepSeek 正在进行安全审核并汇聚证据...")
     prompt = f"""
     你是一位严谨的中药药理学专家。
     现有一位患者主诉如下症状：【{symptoms}】
     主治医师开具的方案如下：
-    {prescription}
+    【{prescription}】
+    文献中得到的内容如下：
+    【{literature_summary}】
     
     请执行以下任务：
     1. 【安全校验】：检查方剂中是否存在“十八反”、“十九畏”或明显的毒性药物配伍冲突。如果有，请明确指出并建议替换；如果无，请声明“安全校验通过”。
@@ -60,19 +68,25 @@ def verify_and_provide_evidence_deepseek(symptoms, prescription):
 # main
 def tcm_agent_run(symptoms):
     print(f"=== 收到患者症状：{symptoms} ===\n")
+    literature_summary = ""
+    pdf_path = PDF_PATH
+    if pdf_path and os.path.exists(pdf_path):
+        print("-" * 50)
+        literature_summary = literature_retrieval(symptoms=symptoms, api_key=QWEN_API_KEY, pdf_dir=pdf_path)
+        print("\n【文献分析报告 (Qwen)】\n", literature_summary)
     
     # 开方
-    qwen_output = generate_prescription_qwen(symptoms)
+    qwen_output = generate_prescription_qwen(literature_summary, symptoms)
     print("\n【初诊方案 (Qwen)】\n", qwen_output)
     print("-" * 50)
     
     # 审核
-    deepseek_output = verify_and_provide_evidence_deepseek(symptoms, qwen_output)
+    deepseek_output = verify_and_provide_evidence_deepseek(symptoms, qwen_output,literature_summary)
     print("\n【审查与证据报告 (DeepSeek)】\n", deepseek_output)
     
     return qwen_output, deepseek_output
 
 if __name__ == "__main__":
     #test_symptoms = "近期工作压力大，头晕胀痛，急躁易怒，口苦咽干，失眠多梦，舌红苔黄，脉弦数。"
-    test_symptoms = "突发眼部浮肿，皮肤紧绷，伴有发热、恶寒，小便不利。"
+    test_symptoms = "患者，男性，68岁。近2个月来逐渐出现双下肢水肿，初起为踝部轻度浮肿，晨轻暮重，按之凹陷。近2周症状加重，水肿上延至小腿，伴乏力明显。活动后气促明显，上楼需中途休息，夜间需垫高2个枕头方可入睡，偶有夜间憋醒。伴心悸、胸闷，食欲减退，小便量减少。查体可见双下肢凹陷性水肿，面色晦暗，四肢欠温。"
     tcm_agent_run(test_symptoms)
