@@ -1,9 +1,42 @@
 import os
 import fitz  # PyMuPDF
+import numpy as np
+# import jieba
 import dashscope
 from dashscope import Generation
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+# from sklearn.feature_extraction.text import TfidfVectorizer
+# from sklearn.metrics.pairwise import cosine_similarity
+
+def get_embedding(text, api_key):
+    from openai import OpenAI
+
+    client = OpenAI(
+        api_key=api_key,
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
+    if not text or len(text.strip()) < 10:
+        return None
+
+    text = text[:1000]
+
+    try:
+        response = client.embeddings.create(
+            model="text-embedding-v4",
+            input=text,
+            dimensions=1024
+        )
+
+        return response.data[0].embedding
+
+    except Exception as e:
+        print("❌ embedding错误:", e)
+        return None
+    
+def cosine_sim(a, b):
+    a = np.array(a)
+    b = np.array(b)
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
 
 def load_pdf_files(pdf_dir):
     pdf_files = []
@@ -12,16 +45,49 @@ def load_pdf_files(pdf_dir):
             pdf_files.append(file)
     return pdf_files
 
+def extract_pdf_abstract(pdf_path):
+    doc = fitz.open(pdf_path)
+    text = doc[0].get_text()
+    doc.close()
+    return text[:1500]
 
-def retrieve_top_k(symptoms, pdf_files, k=5):
-    corpus = pdf_files + [symptoms]
+def retrieve_top_k(symptoms, api_key, pdf_dir, pdf_files, k=5):
+    corpus = []
+    embeddings = []
 
-    vectorizer = TfidfVectorizer()
-    tfidf_matrix = vectorizer.fit_transform(corpus)
+    #print("正在提取摘要...")
 
-    sim = cosine_similarity(tfidf_matrix[-1], tfidf_matrix[:-1])[0]
+    for pdf in pdf_files:
+        path = os.path.join(pdf_dir, pdf)
+        abstract = extract_pdf_abstract(path)
 
-    top_k_idx = sim.argsort()[-k:][::-1]
+        # 防止空文本
+        if not abstract or len(abstract.strip()) < 20:
+            abstract = pdf
+
+        corpus.append(abstract)
+
+    # print("正在计算 embedding...")
+
+    for text in corpus:
+        emb = get_embedding(text, api_key)
+        embeddings.append(emb)
+    query_emb = get_embedding(symptoms, api_key)
+
+    sims = []
+    for i, emb in enumerate(embeddings):
+        if emb is None or query_emb is None:
+            sims.append(0)
+            continue
+
+        score = cosine_sim(query_emb, emb)
+        sims.append(score)
+
+    # print("\n=== 相似度列表 ===")
+    # for i, score in enumerate(sims):
+    #     print(f"{pdf_files[i]}  -->  {score:.4f}")
+
+    top_k_idx = np.argsort(sims)[-k:][::-1]
 
     return [pdf_files[i] for i in top_k_idx]
 
@@ -99,7 +165,6 @@ def summarize_all(api_key, results, symptoms):
     return response["output"]["text"]
 
 
-# ========== 主流程 ==========
 def literature_retrieval(symptoms, api_key, pdf_dir="./pdfs", topk=5, max_token=10000):
     print("读取PDF列表...")
     pdf_files = load_pdf_files(pdf_dir)
@@ -107,7 +172,7 @@ def literature_retrieval(symptoms, api_key, pdf_dir="./pdfs", topk=5, max_token=
     print(f"共 {len(pdf_files)} 篇论文")
 
     print("正在匹配最相关论文...")
-    top_papers = retrieve_top_k(symptoms, pdf_files, topk)
+    top_papers = retrieve_top_k(symptoms, api_key, pdf_dir, pdf_files, topk)
 
     print("Top论文：")
     for p in top_papers:
@@ -130,12 +195,11 @@ def literature_retrieval(symptoms, api_key, pdf_dir="./pdfs", topk=5, max_token=
     return final_result
 
 
-# ========== 运行 ==========
 if __name__ == "__main__":
     #symptoms = "下肢水肿 气促 心悸 夜间不能平卧"
-    symptoms = "近期工作压力大，头晕胀痛，急躁易怒，口苦咽干，失眠多梦，舌红苔黄，脉弦数。"
-    #symptoms = "患者，男性，68岁。近2个月来逐渐出现双下肢水肿，初起为踝部轻度浮肿，晨轻暮重，按之凹陷。近2周症状加重，水肿上延至小腿，伴乏力明显。活动后气促明显，上楼需中途休息，夜间需垫高2个枕头方可入睡，偶有夜间憋醒。伴心悸、胸闷，食欲减退，小便量减少。查体可见双下肢凹陷性水肿，面色晦暗，四肢欠温。"
-    api_key = "QWEN_KEY"
+    #symptoms = "近期工作压力大，头晕胀痛，急躁易怒，口苦咽干，失眠多梦，舌红苔黄，脉弦数。"
+    symptoms = "患者，男性，68岁。近2个月来逐渐出现双下肢水肿，初起为踝部轻度浮肿，晨轻暮重，按之凹陷。近2周症状加重，水肿上延至小腿，伴乏力明显。活动后气促明显，上楼需中途休息，夜间需垫高2个枕头方可入睡，偶有夜间憋醒。伴心悸、胸闷，食欲减退，小便量减少。查体可见双下肢凹陷性水肿，面色晦暗，四肢欠温。"
+    api_key = "Qwen API key"
 
     result = literature_retrieval(symptoms, api_key)
 
